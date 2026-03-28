@@ -8,7 +8,9 @@ A Python library for **tax-aware portfolio optimization** using mixed-integer qu
 
 `taxopt` solves the portfolio rebalancing problem jointly with tax minimization:
 
-$$\max_w \ \alpha^\top w - \lambda \, w^\top \Sigma w - \gamma_{\text{tax}} \cdot \text{tax\_cost}$$
+```math
+\max_w \ \alpha^\top w - \lambda \, w^\top \Sigma w - \gamma_{\text{tax}} \cdot \text{tax\_cost}
+```
 
 subject to leverage, net exposure, per-asset weight caps, turnover limits, and wash-sale constraints.
 
