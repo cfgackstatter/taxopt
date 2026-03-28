@@ -1,0 +1,4 @@
+cvxpy==1.8.1
+numpy==2.4.3
+pytest==9.0.2
+scipy==1.17.1
