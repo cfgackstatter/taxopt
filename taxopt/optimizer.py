@@ -7,7 +7,6 @@ from typing import cast
 import cvxpy as cp
 from cvxpy.constraints.constraint import Constraint as CpConstraint
 import numpy as np
-from scipy.sparse import csr_matrix
 
 from .data_types import (
     AssetId, TaxLot, LotClose, LongOpen, ShortOpen,
@@ -26,6 +25,7 @@ class CvxpyOptimizer:
     turnover_relax_step: float = 0.05
     turnover_relax_max_attempts: int = 5
     mip_gap: float | None = 0.0
+    periods_per_year: float = 12.0
 
     def solve(
         self,
@@ -34,7 +34,8 @@ class CvxpyOptimizer:
         tax_policy: TaxPolicy,
         total_value: float,
     ) -> OptimizationResult:
-        assert total_value > 0, f"total_value must be positive, got {total_value}"
+        if total_value <= 0:
+            raise ValueError(f"total_value must be positive, got {total_value}")
 
         effective_inputs = inputs
         prob: cp.Problem | None = None
@@ -47,8 +48,10 @@ class CvxpyOptimizer:
         for attempt in range(attempts):
             ctx  = _LotContext.build(portfolio, effective_inputs, tax_policy)
             v    = _build_variables(ctx)
-            cons = _build_constraints(ctx, v, effective_inputs, portfolio, total_value)
-            obj  = _build_objective(ctx, v, effective_inputs, total_value, self.tax_aware)
+            lcv, scv = _close_vecs(ctx, v)
+            cons = _build_constraints(ctx, v, effective_inputs, portfolio, total_value, lcv, scv)
+            obj  = _build_objective(ctx, v, effective_inputs, total_value, self.tax_aware,
+                            self.periods_per_year, lcv, scv)
 
             prob = cp.Problem(obj, cons)
 
@@ -108,6 +111,8 @@ class _LotContext:
     cur_shrt_dollars: np.ndarray
     P_long: np.ndarray           # shape (n, m): price-weighted long indicator
     P_shrt: np.ndarray           # shape (n, m): price-weighted short indicator
+    lots_by_asset_long: list[list[int]]
+    lots_by_asset_shrt: list[list[int]]
 
     @property
     def m(self) -> int:
@@ -141,13 +146,15 @@ class _LotContext:
         m = len(all_lots)
 
         if m > 0:
-            lot_qty   = np.array([abs(l.quantity)                              for l in all_lots],         dtype=float)
-            lot_basis = np.array([l.cost_basis                                 for l in all_lots],         dtype=float)
-            lot_px    = np.array([prices[assets[lot_asset_idx[j]]]             for j in range(m)],         dtype=float)
-            gain_pu   = np.array([(lot_px[j] - lot_basis[j]) * (1 if lot_is_long[j] else -1)
-                                   for j in range(m)],                                                     dtype=float)
+            lot_qty = np.array([abs(l.quantity) for l in all_lots], dtype=float)
+            lot_px  = np.array([prices[assets[lot_asset_idx[j]]] for j in range(m)], dtype=float)
+            gain_pu = np.array(
+                [(lot_px[j] - all_lots[j].cost_basis) * (1 if lot_is_long[j] else -1)
+                for j in range(m)],
+                dtype=float,
+            )
             tax_rate  = np.array([_marginal_tax_rate(all_lots[j], gain_pu[j], as_of, tax_policy)
-                                   for j in range(m)],                                                     dtype=float)
+                                   for j in range(m)], dtype=float)
         else:
             lot_qty = lot_px = gain_pu = tax_rate = np.zeros(0)
 
@@ -173,6 +180,14 @@ class _LotContext:
             cur_long = np.zeros(n)
             cur_shrt = np.zeros(n)
 
+        lots_by_asset_long: list[list[int]] = [[] for _ in range(n)]
+        lots_by_asset_shrt: list[list[int]] = [[] for _ in range(n)]
+        for j in range(m):
+            if lot_is_long[j]:
+                lots_by_asset_long[lot_asset_idx[j]].append(j)
+            else:
+                lots_by_asset_shrt[lot_asset_idx[j]].append(j)
+
         return cls(
             assets=assets, n=n, prices=prices,
             all_lots=all_lots, lot_asset_idx=lot_asset_idx, lot_is_long=lot_is_long,
@@ -182,7 +197,9 @@ class _LotContext:
             cur_long_dollars=cur_long,
             cur_shrt_dollars=cur_shrt,
             P_long=P_long,
-            P_shrt=P_shrt
+            P_shrt=P_shrt,
+            lots_by_asset_long=lots_by_asset_long,
+            lots_by_asset_shrt=lots_by_asset_shrt,
         )
 
 
@@ -205,6 +222,16 @@ def _build_variables(ctx: _LotContext) -> _Vars:
     )
 
 
+def _close_vecs(
+    ctx: _LotContext,
+    v: _Vars,
+) -> tuple[cp.Expression, cp.Expression]:
+    if v.s is not None:
+        return ctx.P_long @ v.s, ctx.P_shrt @ v.s
+    z = cp.Constant(np.zeros(ctx.n))
+    return z, z
+
+
 # ---------------------------------------------------------------------------
 # Constraints
 # ---------------------------------------------------------------------------
@@ -215,13 +242,13 @@ def _build_constraints(
     inputs: OptimizationInputs,
     portfolio: Portfolio,
     nav: float,
+    long_close_vec: cp.Expression,
+    shrt_close_vec: cp.Expression,
 ) -> list[CpConstraint]:
     C: list[CpConstraint] = []
 
     if v.s is not None:
         s_m = v.s
-        long_close_vec = ctx.P_long @ s_m
-        shrt_close_vec = ctx.P_shrt @ s_m
 
         # Per-lot cap
         C.append(cast(CpConstraint, s_m <= ctx.lot_qty))
@@ -229,8 +256,8 @@ def _build_constraints(
         # Wash-sale: scalar binary per asset, created only when that side has lots
         max_dollars = float(inputs.max_weight * nav)
         for i in range(ctx.n):
-            lfa = [j for j in range(ctx.m) if ctx.lot_asset_idx[j] == i and ctx.lot_is_long[j]]
-            sfa = [j for j in range(ctx.m) if ctx.lot_asset_idx[j] == i and not ctx.lot_is_long[j]]
+            lfa = ctx.lots_by_asset_long[i]
+            sfa = ctx.lots_by_asset_shrt[i]
             if lfa:
                 tq = float(sum(ctx.lot_qty[j] for j in lfa))
                 cl = cp.sum([s_m[j] for j in lfa])
@@ -243,9 +270,6 @@ def _build_constraints(
                 z  = cp.Variable(boolean=True, name=f"z_shrt_{i}")
                 C += [cast(CpConstraint, cs <= tq * z),
                       cast(CpConstraint, v.b_shrt[i] <= max_dollars * (1 - z))]
-    else:
-        long_close_vec = cp.Constant(np.zeros(ctx.n))
-        shrt_close_vec = cp.Constant(np.zeros(ctx.n))
 
     final_long = ctx.cur_long_dollars - long_close_vec + v.b_long
     final_shrt = ctx.cur_shrt_dollars - shrt_close_vec + v.b_shrt
@@ -284,25 +308,18 @@ def _build_objective(
     inputs: OptimizationInputs,
     nav: float,
     tax_aware: bool,
+    periods_per_year: float,
+    long_close_vec: cp.Expression,
+    shrt_close_vec: cp.Expression,
 ) -> cp.Maximize:
-    if v.s is not None:
-        long_close_vec = ctx.P_long @ v.s
-        shrt_close_vec = ctx.P_shrt @ v.s
-
-        periods_per_year = 12.0  # if you rebalance monthly
-
-        tax_term = (
-            cast(cp.Expression, (ctx.lot_tax_cost_per_unit @ v.s) / nav) * periods_per_year
-            if tax_aware else cp.Constant(0.0)
-        )
-    else:
-        long_close_vec = cp.Constant(np.zeros(ctx.n))
-        shrt_close_vec = cp.Constant(np.zeros(ctx.n))
-        tax_term = cp.Constant(0.0)
-
     final_long = ctx.cur_long_dollars - long_close_vec + v.b_long
     final_shrt = ctx.cur_shrt_dollars - shrt_close_vec + v.b_shrt
     w = (final_long - final_shrt) / nav
+
+    if v.s is not None and tax_aware:
+        tax_term = cast(cp.Expression, (ctx.lot_tax_cost_per_unit @ v.s) / nav) * periods_per_year
+    else:
+        tax_term = cp.Constant(0.0)
 
     alpha_vec = np.array([inputs.alpha.get(a, 0.0) for a in ctx.assets])
     return cp.Maximize(
@@ -323,9 +340,6 @@ def _set_first_rebal_hint(
     nav: float,
 ) -> None:
     """Construct an analytic equal-weight warm-start for the first rebalance."""
-    if v.s is not None:
-        v.s.value = np.zeros(ctx.m)
-
     alpha_arr = np.array([inputs.alpha.get(a, 0.0) for a in ctx.assets])
     order     = np.argsort(alpha_arr)[::-1]   # descending alpha rank
 
@@ -363,8 +377,9 @@ def _extract_result(
     effective_turnover: float | None = None,
 ) -> OptimizationResult:
     def _val(var: cp.Variable) -> np.ndarray:
-        assert var.value is not None
-        return np.array(var.value).flatten()
+        if var.value is None:
+            raise RuntimeError(f"Variable '{var.name()}' has no value after solve — status may be infeasible")
+        return np.asarray(var.value).ravel()
 
     s_arr      = np.maximum(_val(v.s), 0.0) if v.s is not None else np.zeros(0)
     b_long_arr = np.maximum(_val(v.b_long), 0.0)
