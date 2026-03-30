@@ -46,7 +46,7 @@ notebooks/
 Requires Python 3.11+.
 
 ```bash
-pip install cvxpy[SCIP] numpy scipy pandas yfinance plotly
+pip install cvxpy[SCIP] numpy pandas yfinance plotly
 ```
 
 Or clone the repo and install in editable mode:
