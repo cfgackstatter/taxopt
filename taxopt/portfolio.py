@@ -7,6 +7,9 @@ from typing import Any, Mapping, Sequence
 from .data_types import AssetId, TaxLot, LotClose, LongOpen, ShortOpen, PortfolioAction
 from .tax_report import RealizedGain, TaxReport
 
+_MIN_OPEN_QTY  = 1e-4
+_MIN_LOT_QTY   = 1e-4
+
 
 @dataclass
 class Portfolio:
@@ -59,9 +62,11 @@ class Portfolio:
             asset_lots = new_port.lots.get(action.asset, [])
             remaining_qty = abs(lot.quantity) - qty
             new_lots = [l for l in asset_lots if l is not lot]
-            if remaining_qty > 1e-9:
+            if remaining_qty > _MIN_LOT_QTY:
                 new_lots.append(lot.with_quantity(sign * remaining_qty))
             new_port.lots[action.asset] = new_lots
+            if not new_lots:
+                del new_port.lots[action.asset]
 
             # Cash: long close receives proceeds, short cover pays proceeds
             new_port.cash += -proceeds if is_short else proceeds
@@ -69,11 +74,14 @@ class Portfolio:
         for action in [a for a in actions if not isinstance(a, LotClose)]:
             px = prices[action.asset]
             if isinstance(action, LongOpen):
+                if action.quantity < _MIN_OPEN_QTY:
+                    continue
                 new_port.add_lot(TaxLot(action.asset, action.quantity, px, as_of))
                 new_port.cash -= action.quantity * px
             elif isinstance(action, ShortOpen):
+                if action.quantity < _MIN_OPEN_QTY:
+                    continue
                 new_port.add_lot(TaxLot(action.asset, -action.quantity, px, as_of))
                 new_port.cash += action.quantity * px
 
         return new_port, TaxReport.from_events(realized_events, tax_policy, as_of)
-
