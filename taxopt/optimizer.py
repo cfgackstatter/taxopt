@@ -17,6 +17,16 @@ from .tax_policy import TaxPolicy
 
 
 @dataclass
+class PortfolioPolicy:
+    risk_aversion:  float       = 2.0
+    tax_aversion:   float       = 1.0
+    gross_leverage: float       = 1.0
+    net_exposure:   float       = 1.0
+    max_weight:     float       = 0.25
+    max_turnover:   float | None = 0.25
+
+
+@dataclass
 class CvxpyOptimizer:
     solver: str = "SCIP"
     verbose: bool = False
@@ -66,8 +76,7 @@ class CvxpyOptimizer:
             prob.solve(solver=self.solver, verbose=self.verbose, **solver_kwargs)
 
             if prob.status in ("optimal", "optimal_inaccurate"):
-                return _extract_result(ctx, v, effective_inputs, total_value, prob.status,
-                                    effective_turnover=effective_inputs.max_turnover)
+                return _extract_result(ctx, v, effective_inputs, total_value, prob.status)
 
             if (
                 self.relax_turnover
@@ -87,7 +96,7 @@ class CvxpyOptimizer:
             actions=[], realized_gain=0.0, tax_cost=0.0,
             status=prob.status if prob is not None else "failed",
             _prices=inputs.prices,
-            effective_turnover=None,
+            effective_turnover=0.0,
         )
         
 
@@ -374,7 +383,6 @@ def _extract_result(
     inputs: OptimizationInputs,
     nav: float,
     status: str,
-    effective_turnover: float | None = None,
 ) -> OptimizationResult:
     def _val(var: cp.Variable) -> np.ndarray:
         if var.value is None:
@@ -392,6 +400,12 @@ def _extract_result(
     final_shrt = ctx.cur_shrt_dollars + b_shrt_arr - close_shrt
     w_long = final_long / nav
     w_shrt = final_shrt / nav
+
+    w_long_init = ctx.cur_long_dollars / nav
+    w_shrt_init = ctx.cur_shrt_dollars / nav
+    actual_turnover = float(
+        np.sum(np.abs((w_long - w_shrt) - (w_long_init - w_shrt_init))) / 2
+    )
 
     actions: list[PortfolioAction] = []
     for j, lot in enumerate(ctx.all_lots):
@@ -416,7 +430,7 @@ def _extract_result(
         tax_cost     =float(ctx.lot_tax_cost_per_unit  @ s_arr) if ctx.m > 0 else 0.0,
         status=status,
         _prices=dict(inputs.prices),
-        effective_turnover=effective_turnover,
+        effective_turnover=actual_turnover,
     )
 
 

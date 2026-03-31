@@ -81,8 +81,8 @@ class OptimizationResult:
     realized_gain: float
     tax_cost: float
     status: str
+    effective_turnover: float
     _prices: dict[AssetId, float] = field(default_factory=dict)
-    effective_turnover: float | None = None
 
     def to_trades(self, round_to_integer: bool = False) -> list[PortfolioAction]:
         if not round_to_integer:

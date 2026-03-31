@@ -8,9 +8,9 @@ from .data_types import (
     PortfolioAction,
     OptimizationInputs,
     OptimizationResult,
-    Optimizer,          # ← now lives in data_types
+    Optimizer,
 )
-from .optimizer import CvxpyOptimizer
+from .optimizer import CvxpyOptimizer, PortfolioPolicy
 from .portfolio import Portfolio
 from .tax_policy import USCapitalGainsPolicy, NoTaxPolicy, LotMethod
 from .tax_report import TaxReport, RealizedGain
