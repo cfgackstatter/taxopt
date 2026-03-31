@@ -14,6 +14,7 @@ from .optimizer import CvxpyOptimizer, PortfolioPolicy
 from .portfolio import Portfolio
 from .tax_policy import USCapitalGainsPolicy, NoTaxPolicy, LotMethod
 from .tax_report import TaxReport, RealizedGain
+from .tax_ledger import TaxLedger
 
 
 __all__ = [
@@ -26,11 +27,13 @@ __all__ = [
     "ShortOpen",
     "RealizedGain",
     "TaxReport",
+    "TaxLedger",
     "USCapitalGainsPolicy",
     "NoTaxPolicy",
     "LotMethod",
     "OptimizationInputs",
     "OptimizationResult",
-    "CvxpyOptimizer",
     "Optimizer",
+    "CvxpyOptimizer",
+    "PortfolioPolicy",
 ]
