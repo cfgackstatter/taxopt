@@ -4,11 +4,9 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Mapping, Sequence
 
-from .data_types import AssetId, TaxLot, LotClose, LongOpen, ShortOpen, PortfolioAction
+from .data_types import _MIN_ACTION_QTY, AssetId, TaxLot, LotClose, LongOpen, ShortOpen, PortfolioAction
 from .tax_report import RealizedGain, TaxReport
-
-_MIN_OPEN_QTY  = 1e-4
-_MIN_LOT_QTY   = 1e-4
+from .tax_policy import TaxPolicy
 
 
 @dataclass
@@ -32,13 +30,16 @@ class Portfolio:
         self,
         actions: Sequence[PortfolioAction],
         prices: Mapping[AssetId, float],
-        tax_policy: Any,
+        tax_policy: TaxPolicy,
         as_of: date,
     ) -> tuple[Portfolio, TaxReport]:
         new_port = self.copy()
         realized_events: list[RealizedGain] = []
 
-        for action in [a for a in actions if isinstance(a, LotClose)]:
+        closes  = [a for a in actions if isinstance(a, LotClose)]
+        opens   = [a for a in actions if not isinstance(a, LotClose)]
+
+        for action in closes:
             px       = prices[action.asset]
             lot      = action.lot_ref
             qty      = action.quantity          # units to close (positive)
@@ -62,7 +63,7 @@ class Portfolio:
             asset_lots = new_port.lots.get(action.asset, [])
             remaining_qty = abs(lot.quantity) - qty
             new_lots = [l for l in asset_lots if l is not lot]
-            if remaining_qty > _MIN_LOT_QTY:
+            if remaining_qty > _MIN_ACTION_QTY:
                 new_lots.append(lot.with_quantity(sign * remaining_qty))
             new_port.lots[action.asset] = new_lots
             if not new_lots:
@@ -71,15 +72,15 @@ class Portfolio:
             # Cash: long close receives proceeds, short cover pays proceeds
             new_port.cash += -proceeds if is_short else proceeds
 
-        for action in [a for a in actions if not isinstance(a, LotClose)]:
+        for action in opens:
             px = prices[action.asset]
             if isinstance(action, LongOpen):
-                if action.quantity < _MIN_OPEN_QTY:
+                if action.quantity < _MIN_ACTION_QTY:
                     continue
                 new_port.add_lot(TaxLot(action.asset, action.quantity, px, as_of))
                 new_port.cash -= action.quantity * px
             elif isinstance(action, ShortOpen):
-                if action.quantity < _MIN_OPEN_QTY:
+                if action.quantity < _MIN_ACTION_QTY:
                     continue
                 new_port.add_lot(TaxLot(action.asset, -action.quantity, px, as_of))
                 new_port.cash += action.quantity * px

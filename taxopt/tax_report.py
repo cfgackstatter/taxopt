@@ -2,7 +2,8 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Sequence
+from collections import defaultdict
 
 from .data_types import AssetId, TaxLot
 
@@ -22,7 +23,7 @@ class RealizedGain:
 class TaxReport:
     as_of: date
     events: Sequence[RealizedGain]
-    totals_by_type: Mapping[str, float]
+    totals_by_type: dict[str, float]
     total_gain: float
 
     @classmethod
@@ -33,10 +34,10 @@ class TaxReport:
         as_of: date,
     ) -> "TaxReport":
         ev = list(events)
-        totals: dict[str, float] = {}
+        totals: dict[str, float] = defaultdict(float)
         for e in ev:
-            totals[e.gain_type] = totals.get(e.gain_type, 0.0) + e.gain
-        totals = tax_policy.netting_rules(totals)
+            totals[e.gain_type] += e.gain
+        totals = dict(tax_policy.netting_rules(totals))
         return cls(
             as_of=as_of,
             events=ev,
