@@ -1,7 +1,8 @@
 # tests/test_tax_policy.py
 from datetime import date, timedelta
-from taxopt.data_types import TaxLot
+from taxopt.data_types import TaxLot, LotClose
 from taxopt.tax_policy import USCapitalGainsPolicy, LotMethod
+from taxopt.portfolio import Portfolio
 
 
 def _long_lot(basis: float, acq: date) -> TaxLot:
@@ -91,21 +92,36 @@ def test_netting_st_loss_larger_than_lt_gain(us_policy):
 # ---------------------------------------------------------------------------
 
 def test_lot_method_fifo():
+    """FIFO: oldest lot (2022) must be consumed first."""
     policy = USCapitalGainsPolicy(lot_method=LotMethod.FIFO)
-    lots = [
-        TaxLot("X", 10.0, 90.0, date(2023, 6, 1)),
-        TaxLot("X", 10.0, 80.0, date(2022, 1, 1)),
-    ]
-    _, remaining, _ = policy.match_and_realize("X", lots, 10.0, 100.0, date(2024, 1, 1))
+    today = date(2024, 1, 1)
+    lot_newer = TaxLot("X", 10.0, 90.0, date(2023, 6, 1))
+    lot_older = TaxLot("X", 10.0, 80.0, date(2022, 1, 1))
+    p = Portfolio(cash=0.0)
+    p.add_lot(lot_newer)
+    p.add_lot(lot_older)
+    new_p, report = p.apply_actions(
+        [LotClose(asset="X", quantity=10.0, lot_ref=lot_older)],
+        {"X": 100.0}, policy, today,
+    )
+    remaining = new_p.lots.get("X", [])
     assert len(remaining) == 1
-    assert remaining[0].cost_basis == 90.0   # older (2022) lot consumed first
+    assert remaining[0].cost_basis == 90.0   # older (2022) lot consumed, newer survives
 
 
 def test_lot_method_max_loss():
+    """MAX_LOSS: highest-basis lot (120) must be consumed first."""
     policy = USCapitalGainsPolicy(lot_method=LotMethod.MAX_LOSS)
-    lots = [
-        TaxLot("X", 10.0,  50.0, date(2022, 1, 1)),
-        TaxLot("X", 10.0, 120.0, date(2023, 1, 1)),
-    ]
-    _, remaining, _ = policy.match_and_realize("X", lots, 10.0, 100.0, date(2024, 1, 1))
-    assert remaining[0].cost_basis == 50.0   # highest basis consumed first
+    today = date(2024, 1, 1)
+    lot_low_basis  = TaxLot("X", 10.0,  50.0, date(2022, 1, 1))
+    lot_high_basis = TaxLot("X", 10.0, 120.0, date(2023, 1, 1))
+    p = Portfolio(cash=0.0)
+    p.add_lot(lot_low_basis)
+    p.add_lot(lot_high_basis)
+    new_p, report = p.apply_actions(
+        [LotClose(asset="X", quantity=10.0, lot_ref=lot_high_basis)],
+        {"X": 100.0}, policy, today,
+    )
+    remaining = new_p.lots.get("X", [])
+    assert len(remaining) == 1
+    assert remaining[0].cost_basis == 50.0   # high-basis lot consumed, low-basis survives

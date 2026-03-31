@@ -4,18 +4,19 @@ import numpy as np
 import pytest
 from datetime import date, timedelta
 
-from taxopt.data_types import LotClose, LongOpen, OptimizationInputs, OptimizationResult, TaxLot
+from taxopt.data_types import LotClose, LongOpen, ShortOpen, OptimizationInputs, OptimizationResult, TaxLot
 from taxopt.optimizer import CvxpyOptimizer
-from taxopt.portfolio import Portfolio
+from taxopt.portfolio import Portfolio, _MIN_ACTION_QTY
 from taxopt.tax_policy import USCapitalGainsPolicy, NoTaxPolicy, LotMethod
 
 EPS       = 1e-4
 ROUND_EPS = 0.05
 
 
-def _lot_sell(result: OptimizationResult, j: int) -> float:
+def _lot_sell(result: OptimizationResult, lot_ref: TaxLot) -> float:
+    """Return the quantity closed for a specific lot (matched by identity)."""
     for a in result.actions:
-        if isinstance(a, LotClose) and a.lot_index == j:
+        if isinstance(a, LotClose) and a.lot_ref is lot_ref:
             return a.quantity
     return 0.0
 
@@ -154,10 +155,11 @@ def test_max_weight_respected(simple_portfolio, long_only_inputs, us_policy, pri
 
 
 def test_lot_sells_within_bounds(two_lot_portfolio, long_only_inputs, us_policy, prices, solver):
-    result   = solver.solve(two_lot_portfolio, long_only_inputs, us_policy, two_lot_portfolio.total_value(prices))
+    result = solver.solve(two_lot_portfolio, long_only_inputs, us_policy,
+                          two_lot_portfolio.total_value(prices))
     all_lots = [l for ls in two_lot_portfolio.lots.values() for l in ls]
-    for j, lot in enumerate(all_lots):
-        assert _lot_sell(result, j) <= abs(lot.quantity) + EPS
+    for lot in all_lots:
+        assert _lot_sell(result, lot) <= abs(lot.quantity) + EPS
 
 
 # ---------------------------------------------------------------------------
@@ -177,13 +179,15 @@ def test_prefers_loss_lot_over_gain_lot(two_lot_portfolio, long_only_inputs, us_
         max_weight=0.4,
         as_of=date.today(),
     )
-    result = solver.solve(two_lot_portfolio, inputs, us_policy, two_lot_portfolio.total_value(prices))
+    result = solver.solve(two_lot_portfolio, inputs, us_policy,
+                          two_lot_portfolio.total_value(prices))
 
-    all_lots = [l for ls in two_lot_portfolio.lots.values() for l in ls]
-    gain_lot_idx = next(j for j, l in enumerate(all_lots) if l.asset == "AAPL" and l.cost_basis == 50.0)
-    loss_lot_idx = next(j for j, l in enumerate(all_lots) if l.asset == "AAPL" and l.cost_basis == 160.0)
+    gain_lot = next(l for ls in two_lot_portfolio.lots.values()
+                    for l in ls if l.asset == "AAPL" and l.cost_basis == 50.0)
+    loss_lot = next(l for ls in two_lot_portfolio.lots.values()
+                    for l in ls if l.asset == "AAPL" and l.cost_basis == 160.0)
 
-    assert _lot_sell(result, loss_lot_idx) >= _lot_sell(result, gain_lot_idx) - EPS
+    assert _lot_sell(result, loss_lot) >= _lot_sell(result, gain_lot) - EPS
 
 
 def test_no_tax_policy_zero_tax_cost(simple_portfolio, long_only_inputs, no_tax_policy, prices, solver):
@@ -238,10 +242,11 @@ def test_rounded_trades_are_integers(two_lot_portfolio, long_only_inputs, us_pol
 
 
 def test_rounded_lot_sells_within_bounds(two_lot_portfolio, long_only_inputs, us_policy, prices, solver):
-    result   = solver.solve(two_lot_portfolio, long_only_inputs, us_policy, two_lot_portfolio.total_value(prices))
+    result = solver.solve(two_lot_portfolio, long_only_inputs, us_policy,
+                          two_lot_portfolio.total_value(prices))
     all_lots = [l for ls in two_lot_portfolio.lots.values() for l in ls]
-    for j, lot in enumerate(all_lots):
-        floored = min(math.floor(_lot_sell(result, j)), abs(lot.quantity))
+    for lot in all_lots:
+        floored = min(math.floor(_lot_sell(result, lot)), abs(lot.quantity))
         assert floored <= abs(lot.quantity)
 
 
@@ -289,3 +294,24 @@ def test_no_simultaneous_buy_and_sell_same_asset(two_lot_portfolio, us_policy, p
     bought_assets = {a.asset for a in result.actions if isinstance(a, LongOpen)}
     assert sold_assets.isdisjoint(bought_assets), \
         f"Wash-sale violation: {sold_assets & bought_assets} both sold and re-bought"
+
+
+def test_no_dust_opens(simple_portfolio, long_only_inputs, us_policy, prices, solver):
+    result = solver.solve(simple_portfolio, long_only_inputs, us_policy,
+                          simple_portfolio.total_value(prices))
+    for a in result.actions:
+        if isinstance(a, (LongOpen, ShortOpen)):
+            assert a.quantity >= _MIN_ACTION_QTY
+
+
+def test_no_dust_lot_remainders(two_lot_portfolio, long_only_inputs, us_policy, prices, solver):
+    result = solver.solve(two_lot_portfolio, long_only_inputs, us_policy,
+                          two_lot_portfolio.total_value(prices))
+    new_p, _ = two_lot_portfolio.apply_actions(
+        result.actions, prices, us_policy, date.today()
+    )
+    for asset, lots in new_p.lots.items():
+        for lot in lots:
+            assert abs(lot.quantity) >= _MIN_ACTION_QTY, (
+                f"Dust lot for {asset}: qty={lot.quantity}"
+            )
