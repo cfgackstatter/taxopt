@@ -9,7 +9,7 @@ from cvxpy.constraints.constraint import Constraint as CpConstraint
 import numpy as np
 
 from .data_types import (
-    AssetId, TaxLot, LotClose, LongOpen, ShortOpen,
+     _MIN_ACTION_QTY, AssetId, TaxLot, LotClose, LongOpen, ShortOpen,
     OptimizationInputs, OptimizationResult, PortfolioAction,
 )
 from .portfolio import Portfolio
@@ -410,15 +410,16 @@ def _extract_result(
     actions: list[PortfolioAction] = []
     for j, lot in enumerate(ctx.all_lots):
         units = float(s_arr[j])
-        if units > 1e-9:
+        if units > _MIN_ACTION_QTY:
             actions.append(LotClose(
-                lot_index=j, asset=lot.asset,
-                quantity=min(units, float(ctx.lot_qty[j])), lot_ref=lot,
+                asset=lot.asset,
+                quantity=min(units, float(ctx.lot_qty[j])),
+                lot_ref=lot,
             ))
     for i, asset in enumerate(ctx.assets):
-        if b_long_arr[i] > 1e-9:
+        if b_long_arr[i] > _MIN_ACTION_QTY:
             actions.append(LongOpen(asset=asset, quantity=b_long_arr[i] / ctx.prices[asset]))
-        if b_shrt_arr[i] > 1e-9:
+        if b_shrt_arr[i] > _MIN_ACTION_QTY:
             actions.append(ShortOpen(asset=asset, quantity=b_shrt_arr[i] / ctx.prices[asset]))
 
     return OptimizationResult(

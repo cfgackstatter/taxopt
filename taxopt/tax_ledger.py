@@ -48,9 +48,16 @@ class TaxLedger:
         for asset, lots in portfolio.lots.items():
             px = prices[asset]
             for lot in lots:
-                if lot.quantity <= 0:
-                    continue
-                gain = (px - lot.cost_basis) * lot.quantity
+                if lot.quantity > 0:
+                    # Long: gain = (price - cost) * qty
+                    gain = (px - lot.cost_basis) * lot.quantity
+                else:
+                    # Short: gain = (cost - price) * |qty|  — positive when price has fallen
+                    gain = (lot.cost_basis - px) * abs(lot.quantity)
+
+                if gain <= 0:
+                    continue  # unrealized losses don't create a DTL
+
                 days = (as_of - lot.acquisition_date).days
                 if days >= policy.lt_threshold_days:
                     unreal_lt += gain

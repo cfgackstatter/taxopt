@@ -4,13 +4,20 @@ import math
 from dataclasses import dataclass, field, replace
 from datetime import date
 from typing import TYPE_CHECKING, Mapping, Protocol, TypeAlias
-
 import numpy as np
 
 if TYPE_CHECKING:
     from .portfolio import Portfolio
     from .tax_policy import TaxPolicy
 
+# ---------------------------------------------------------------------------
+# GLOBAL CONSTANTS / VARIABLES
+# ---------------------------------------------------------------------------
+_MIN_ACTION_QTY = 1e-4
+
+# ---------------------------------------------------------------------------
+# Type Aliases
+# ---------------------------------------------------------------------------
 AssetId: TypeAlias = str
 
 # ---------------------------------------------------------------------------
@@ -37,7 +44,6 @@ class TaxLot:
 
 @dataclass(frozen=True)
 class LotClose:
-    lot_index: int
     asset: AssetId
     quantity: float
     lot_ref: TaxLot
