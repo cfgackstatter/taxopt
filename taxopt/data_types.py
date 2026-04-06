@@ -32,6 +32,13 @@ class TaxLot:
     acquisition_date: date
     metadata: Mapping[str, object] | None = None
 
+    def __repr__(self) -> str:
+        side = "SHORT" if self.quantity < 0 else "LONG"
+        return (
+            f"TaxLot({self.asset} {side} {abs(self.quantity):.4f} "
+            f"@ ${self.cost_basis:.2f} acquired {self.acquisition_date})"
+        )
+
     def market_value(self, price: float) -> float:
         return self.quantity * price
 

@@ -14,6 +14,41 @@ class Portfolio:
     lots: dict[AssetId, list[TaxLot]] = field(default_factory=dict)
     cash: float = 0.0
 
+    def __str__(self) -> str:
+        lines = [f"Portfolio  cash=${self.cash:,.2f}  lots={sum(len(v) for v in self.lots.values())}"]
+        lines.append(f"  {'Asset':<8} {'Qty':>10} {'Basis':>8} {'Acquired':<12} {'Side':<6}")
+        lines.append("  " + "-" * 50)
+        for asset, lots in sorted(self.lots.items()):
+            for lot in lots:
+                side = "SHORT" if lot.quantity < 0 else "LONG"
+                lines.append(
+                    f"  {asset:<8} {lot.quantity:>10.4f} {lot.cost_basis:>8.2f} "
+                    f"{str(lot.acquisition_date):<12} {side:<6}"
+                )
+        return "\n".join(lines)
+
+    def _repr_html_(self) -> str:
+        rows = ""
+        for asset, lots in sorted(self.lots.items()):
+            for lot in lots:
+                side = "SHORT" if lot.quantity < 0 else "LONG"
+                gain_color = "#c0392b" if lot.quantity < 0 else "#27ae60"
+                rows += (
+                    f"<tr><td>{asset}</td><td>{lot.quantity:.4f}</td>"
+                    f"<td>${lot.cost_basis:.2f}</td><td>{lot.acquisition_date}</td>"
+                    f"<td style='color:{gain_color}'>{side}</td></tr>"
+                )
+        return f"""
+        <b>Portfolio</b> &nbsp; cash=<b>${self.cash:,.2f}</b> &nbsp;
+        lots=<b>{sum(len(v) for v in self.lots.values())}</b><br>
+        <table border='0' style='border-collapse:collapse;font-size:13px'>
+        <thead><tr style='border-bottom:1px solid #ccc'>
+            <th align='left'>Asset</th><th align='right'>Qty</th>
+            <th align='right'>Basis</th><th>Acquired</th><th>Side</th>
+        </tr></thead>
+        <tbody>{rows}</tbody>
+        </table>"""
+
     def copy(self) -> Portfolio:
         return Portfolio(lots={a: list(ls) for a, ls in self.lots.items()}, cash=self.cash)
 
