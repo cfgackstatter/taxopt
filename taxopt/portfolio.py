@@ -58,6 +58,22 @@ class Portfolio:
     def total_value(self, prices: Mapping[AssetId, float]) -> float:
         return sum(l.quantity * prices[a] for a, ls in self.lots.items() for l in ls) + self.cash
 
+    def value_by_asset(self, prices: Mapping[AssetId, float]) -> dict[AssetId, float]:
+        vals: dict[AssetId, float] = {}
+        for asset, lots in self.lots.items():
+            qty = sum(l.quantity for l in lots)
+            if abs(qty) < 1e-9:
+                continue
+            vals[asset] = qty * prices[asset]
+        return vals
+
+    def weights(self, prices: Mapping[AssetId, float]) -> dict[AssetId, float]:
+        vals = self.value_by_asset(prices)
+        total = sum(vals.values())
+        if total <= 0:
+            return {a: 0.0 for a in vals}
+        return {a: v / total for a, v in vals.items()}
+
     def add_lot(self, lot: TaxLot) -> None:
         self.lots.setdefault(lot.asset, []).append(lot)
 
