@@ -36,6 +36,7 @@ class CvxpyOptimizer:
     turnover_relax_max_attempts: int = 5
     mip_gap: float | None = 0.0
     periods_per_year: float = 12.0
+    skip_warm_start: bool = False
 
     def solve(
         self,
@@ -66,7 +67,7 @@ class CvxpyOptimizer:
             prob = cp.Problem(obj, cons)
 
             # Analytic warm start for first rebalance (no existing lots)
-            if ctx.m == 0:
+            if ctx.m == 0 and not self.skip_warm_start:
                 _set_first_rebal_hint(v, ctx, effective_inputs, total_value)
 
             solver_kwargs: dict = {}
@@ -333,7 +334,7 @@ def _build_objective(
     alpha_vec = np.array([inputs.alpha.get(a, 0.0) for a in ctx.assets])
     return cp.Maximize(
         alpha_vec @ w
-        - inputs.risk_aversion * cp.quad_form(w, cp.psd_wrap(inputs.covariance))
+        - (inputs.risk_aversion / 2.0) * cp.quad_form(w, cp.psd_wrap(inputs.covariance))
         - inputs.tax_aversion * tax_term
     )
 
@@ -342,35 +343,25 @@ def _build_objective(
 # Initial solution
 # ---------------------------------------------------------------------------
 
-def _set_first_rebal_hint(
-    v: _Vars,
-    ctx: _LotContext,
-    inputs: OptimizationInputs,
-    nav: float,
-) -> None:
-    """Construct an analytic equal-weight warm-start for the first rebalance."""
-    alpha_arr = np.array([inputs.alpha.get(a, 0.0) for a in ctx.assets])
-    order     = np.argsort(alpha_arr)[::-1]   # descending alpha rank
+def _set_first_rebal_hint(v, ctx, inputs, nav):
+    alpha = np.array([inputs.alpha.get(a, 0.0) for a in ctx.assets], dtype=float)
+    lam   = inputs.risk_aversion
+    eta   = inputs.net_exposure
+    ones  = np.ones(len(ctx.assets))
 
-    long_pool  = (inputs.gross_leverage + inputs.net_exposure) / 2.0 * nav
-    short_pool = (inputs.gross_leverage - inputs.net_exposure) / 2.0 * nav
-    max_dollars = inputs.max_weight * nav
+    try:
+        Sigma_inv_alpha = np.linalg.solve(inputs.covariance, alpha)
+        Sigma_inv_ones  = np.linalg.solve(inputs.covariance, ones)
+    except np.linalg.LinAlgError:
+        diag = np.diag(inputs.covariance) + 1e-8
+        Sigma_inv_alpha = alpha / diag
+        Sigma_inv_ones  = ones  / diag
 
-    def _equal_weight(pool: float, indices: np.ndarray) -> np.ndarray:
-        out = np.zeros(ctx.n)
-        if pool < 1e-9:
-            return out
-        per_name = min(pool / len(indices), max_dollars)
-        for idx in indices:
-            out[idx] = per_name
-        return out
+    mu = (ones @ Sigma_inv_alpha - lam * eta) / (ones @ Sigma_inv_ones)
+    w  = Sigma_inv_alpha / lam - mu / lam * Sigma_inv_ones
 
-    # How many names fit given max_weight cap?
-    k_long  = max(1, int(np.ceil(long_pool  / max_dollars)))
-    k_short = max(1, int(np.ceil(short_pool / max_dollars))) if short_pool > 0 else 0
-
-    v.b_long.value = _equal_weight(long_pool,  order[:k_long])
-    v.b_shrt.value = _equal_weight(short_pool, order[-k_short:]) if k_short > 0 else np.zeros(ctx.n)
+    v.b_long.value = np.maximum( w, 0.0) * nav
+    v.b_shrt.value = np.maximum(-w, 0.0) * nav
 
 
 # ---------------------------------------------------------------------------

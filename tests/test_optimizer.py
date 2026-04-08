@@ -315,3 +315,49 @@ def test_no_dust_lot_remainders(two_lot_portfolio, long_only_inputs, us_policy, 
             assert abs(lot.quantity) >= _MIN_ACTION_QTY, (
                 f"Dust lot for {asset}: qty={lot.quantity}"
             )
+
+
+# ---------------------------------------------------------------------------
+# 6. Warm start
+# ---------------------------------------------------------------------------
+
+def _make_large_inputs(n: int = 55, seed: int = 42) -> tuple[OptimizationInputs, float]:
+    rng    = np.random.default_rng(seed)
+    assets = [f"A{i:02d}" for i in range(n)]
+    A      = rng.standard_normal((n, n)) * 0.1
+    cov    = A @ A.T + np.eye(n) * 0.01
+    alpha  = {a: float(v) for a, v in zip(assets, rng.standard_normal(n))}
+    prices = {a: 100.0 for a in assets}
+    inputs = OptimizationInputs(
+        alpha=alpha,
+        covariance=cov,
+        assets=assets,
+        prices=prices,
+        risk_aversion=2.0,
+        tax_aversion=0.0,
+        gross_leverage=1.6,
+        net_exposure=1.0,
+        max_weight=0.2,
+        as_of=date.today(),
+    )
+    return inputs, 100_000.0
+
+
+def test_warm_start_faster(us_policy):
+    import time
+    inputs, nav = _make_large_inputs()
+    portfolio   = Portfolio(cash=nav)
+
+    solver_warm = CvxpyOptimizer(solver="SCIP", tax_aware=False)
+    solver_cold = CvxpyOptimizer(solver="SCIP", tax_aware=False, skip_warm_start=True)
+
+    t0     = time.perf_counter()
+    solver_warm.solve(portfolio, inputs, us_policy, nav)
+    t_warm = time.perf_counter() - t0
+
+    t0     = time.perf_counter()
+    solver_cold.solve(portfolio, inputs, us_policy, nav)
+    t_cold = time.perf_counter() - t0
+
+    print(f"\nwarm={t_warm:.2f}s  cold={t_cold:.2f}s  speedup={t_cold/t_warm:.1f}x")
+    assert t_warm < t_cold, f"Warm start not faster: {t_warm:.2f}s >= {t_cold:.2f}s"
