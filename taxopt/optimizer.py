@@ -333,7 +333,7 @@ def _build_objective(
     alpha_vec = np.array([inputs.alpha.get(a, 0.0) for a in ctx.assets])
     return cp.Maximize(
         alpha_vec @ w
-        - inputs.risk_aversion * cp.quad_form(w, inputs.covariance)
+        - inputs.risk_aversion * cp.quad_form(w, cp.psd_wrap(inputs.covariance))
         - inputs.tax_aversion * tax_term
     )
 
