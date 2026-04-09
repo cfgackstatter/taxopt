@@ -305,6 +305,13 @@ def _build_constraints(
             cp.norm1(final_long - final_shrt - cur_net) / nav <= 2.0 * inputs.max_turnover
         ))
 
+    # ── No simultaneous long and short on the same asset ─────────────────
+    # Binary z_ls[i] = 1 means asset i is long-side, 0 means short-side.
+    for i in range(ctx.n):
+        z_ls = cp.Variable(boolean=True, name=f"z_ls{i}")
+        C.append(cast(CpConstraint, final_long[i] <= max_dollars * z_ls))
+        C.append(cast(CpConstraint, final_shrt[i] <= max_dollars * (1 - z_ls)))
+
     return C
 
 
