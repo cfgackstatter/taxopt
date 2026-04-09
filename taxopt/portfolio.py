@@ -67,12 +67,15 @@ class Portfolio:
             vals[asset] = qty * prices[asset]
         return vals
 
-    def weights(self, prices: Mapping[AssetId, float]) -> dict[AssetId, float]:
-        vals = self.value_by_asset(prices)
-        total = sum(vals.values())
-        if total <= 0:
-            return {a: 0.0 for a in vals}
-        return {a: v / total for a, v in vals.items()}
+    def weights(self, prices: dict[str, float]) -> dict[str, float]:
+        dollar_values = {
+            asset: sum(lot.quantity * prices[asset] for lot in lots)
+            for asset, lots in self.lots.items()
+        }
+        nav = self.cash + sum(dollar_values.values())
+        if abs(nav) < 1e-8:
+            return {asset: 0.0 for asset in self.lots}
+        return {asset: v / nav for asset, v in dollar_values.items()}
 
     def add_lot(self, lot: TaxLot) -> None:
         self.lots.setdefault(lot.asset, []).append(lot)
